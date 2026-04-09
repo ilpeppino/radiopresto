@@ -1,0 +1,5 @@
+{
+  "name": "Radio Presto",
+  "description": "A futuristic, AI-powered radio platform for personalized broadcasts.",
+  "requestFramePermissions": ["microphone"]
+}

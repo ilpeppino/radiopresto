@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@theme {
+  --font-headline: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container-high: var(--surface-container-high);
+  
+  --color-primary: var(--primary);
+  --color-primary-dim: var(--primary-dim);
+  --color-secondary: var(--secondary);
+  --color-tertiary: var(--tertiary);
+  
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+}
+
+:root {
+  --background: #060e20;
+  --surface: #060e20;
+  --surface-container: #0f1930;
+  --surface-container-low: #091328;
+  --surface-container-high: #141f38;
+  
+  --primary: #ba9eff;
+  --primary-dim: #8455ef;
+  --secondary: #53ddfc;
+  --tertiary: #ff86c3;
+  
+  --on-surface: #dee5ff;
+  --on-surface-variant: #a3aac4;
+}
+
+.light {
+  --background: #f8f9ff;
+  --surface: #f8f9ff;
+  --surface-container: #ffffff;
+  --surface-container-low: #f0f2f9;
+  --surface-container-high: #e8ebf5;
+  
+  --primary: #6200ee;
+  --primary-dim: #3700b3;
+  --secondary: #03dac6;
+  --tertiary: #018786;
+  
+  --on-surface: #1c1b1f;
+  --on-surface-variant: #49454f;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-on-surface font-body transition-colors duration-300;
+  }
+}
+
+.glass-panel {
+  background: var(--surface-container);
+  opacity: 0.8;
+  backdrop-filter: blur(24px);
+}
+
+.text-glow {
+  text-shadow: 0 0 12px rgba(186, 158, 255, 0.4);
+}
+
+.neon-glow {
+  box-shadow: 0 0 15px rgba(83, 221, 252, 0.2);
+}
+
+.atmospheric-bg {
+  background: radial-gradient(circle at 50% 50%, var(--surface-container-high) 0%, var(--background) 100%);
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
