@@ -8,8 +8,9 @@ import {
   ActiveScreen,
   SettingsScreen,
   ProfileScreen,
-  NodesScreen
-} from "./components/Screens";
+  NodesScreen,
+  type NodeItem
+} from "./components/screens";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("discover");
@@ -24,7 +25,7 @@ export default function App() {
   const [notifications, setNotifications] = useState<{id: string, text: string, time: string, read: boolean, type?: 'category' | 'node', targetId?: string, targetLabel?: string}[]>([]);
   const [savedBroadcasts, setSavedBroadcasts] = useState<string[]>([]);
   const [avatarUrl, setAvatarUrl] = useState("https://picsum.photos/seed/commander/400/400");
-  const [nodes, setNodes] = useState([
+  const [nodes, setNodes] = useState<NodeItem[]>([
     { id: "node-1", label: "Cyberpunk", icon: "Bolt", status: "Online", freq: "104.2 MHz" },
     { id: "node-2", label: "Space Ambient", icon: "Rocket", status: "Online", freq: "98.5 MHz" },
     { id: "node-3", label: "Synthwave", icon: "Waves", status: "Active", freq: "102.1 MHz" },
@@ -131,7 +132,7 @@ export default function App() {
 
   const handleAddNode = (category: string) => {
     triggerHaptic();
-    const newNode = {
+    const newNode: NodeItem = {
       id: `node-${Date.now()}`,
       label: category,
       icon: "Activity",
