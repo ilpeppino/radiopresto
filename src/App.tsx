@@ -1,36 +1,39 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence } from "motion/react";
 import { TopNav, BottomNav, type Tab } from "./components/UI";
-import { 
-  DiscoverScreen, 
-  CreateScreen, 
-  ResearchingScreen, 
+import {
+  DiscoverScreen,
+  CreateScreen,
+  ResearchingScreen,
   ActiveScreen,
   SettingsScreen,
   ProfileScreen,
-  NodesScreen,
-  type NodeItem
 } from "./components/screens";
+import { createGenerationJob, fetchEpisode } from "@/src/lib/api";
+import type { Episode } from "@/src/types/api";
+
+type AppState = {
+  currentTopic: string | null;
+  currentJobId: string | null;
+  currentEpisode: Episode | null;
+  isGenerating: boolean;
+  error: string | null;
+};
+
+const initialState: AppState = {
+  currentTopic: null,
+  currentJobId: null,
+  currentEpisode: null,
+  isGenerating: false,
+  error: null,
+};
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>("discover");
-  const [isResearching, setIsResearching] = useState(false);
-  const [researchTopic, setResearchTopic] = useState("");
+  const [activeTab, setActiveTab] = useState<Tab>("create");
   const [showSettings, setShowSettings] = useState(false);
-  const [showNodes, setShowNodes] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [hapticEnabled, setHapticEnabled] = useState(true);
-  const [followedCategories, setFollowedCategories] = useState<string[]>([]);
-  const [followedNodes, setFollowedNodes] = useState<string[]>(["node-3"]); // Synthwave is active by default
-  const [notifications, setNotifications] = useState<{id: string, text: string, time: string, read: boolean, type?: 'category' | 'node', targetId?: string, targetLabel?: string}[]>([]);
-  const [savedBroadcasts, setSavedBroadcasts] = useState<string[]>([]);
-  const [avatarUrl, setAvatarUrl] = useState("https://picsum.photos/seed/commander/400/400");
-  const [nodes, setNodes] = useState<NodeItem[]>([
-    { id: "node-1", label: "Cyberpunk", icon: "Bolt", status: "Online", freq: "104.2 MHz" },
-    { id: "node-2", label: "Space Ambient", icon: "Rocket", status: "Online", freq: "98.5 MHz" },
-    { id: "node-3", label: "Synthwave", icon: "Waves", status: "Active", freq: "102.1 MHz" },
-    { id: "node-4", label: "AI Brainwaves", icon: "Brain", status: "Standby", freq: "106.8 MHz" },
-  ]);
+  const [appState, setAppState] = useState<AppState>(initialState);
 
   useEffect(() => {
     if (theme === "light") {
@@ -46,163 +49,154 @@ export default function App() {
     }
   };
 
-  const addNotification = (text: string, type?: 'category' | 'node', targetId?: string, targetLabel?: string) => {
-    const newNotif = {
-      id: `notif-${Date.now()}`,
-      text,
-      time: "Just now",
-      read: false,
-      type,
-      targetId,
-      targetLabel
-    };
-    setNotifications(prev => [newNotif, ...prev]);
-  };
+  const handleStartResearch = async (topicInput: string) => {
+    const topic = topicInput.trim();
+    if (!topic) {
+      setAppState((prev) => ({
+        ...prev,
+        error: "Please enter a topic.",
+      }));
+      return;
+    }
 
-  const toggleFollowCategory = (category: string) => {
-    triggerHaptic();
-    setFollowedCategories(prev => {
-      const isFollowing = prev.includes(category);
-      if (isFollowing) {
-        return prev.filter(c => c !== category);
-      } else {
-        addNotification(`You are now following ${category}. We'll notify you of new trends.`);
-        return [...prev, category];
-      }
+    setAppState({
+      currentTopic: topic,
+      currentJobId: null,
+      currentEpisode: null,
+      isGenerating: true,
+      error: null,
     });
-  };
 
-  const toggleFollowNode = (nodeId: string, label: string) => {
-    triggerHaptic();
-    setFollowedNodes(prev => {
-      const isFollowing = prev.includes(nodeId);
-      if (isFollowing) {
-        return prev.filter(id => id !== nodeId);
-      } else {
-        addNotification(`Node "${label}" followed. Syncing latest transmissions...`);
-        return [...prev, nodeId];
-      }
-    });
-  };
-
-  // Simulate periodic notifications for followed content
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (Math.random() > 0.7) {
-        const isCategory = Math.random() > 0.5;
-        if (isCategory) {
-          const categories = ["Technology", "Culture", "Atmosphere", "Science", "Music"];
-          const cat = categories[Math.floor(Math.random() * categories.length)];
-          addNotification(`New trending content detected in ${cat}!`, 'category', cat, cat);
-        } else {
-          const node = nodes[Math.floor(Math.random() * nodes.length)];
-          addNotification(`Node "${node.label}" is broadcasting a new high-priority signal.`, 'node', node.id, node.label);
-        }
-      }
-    }, 20000);
-    
-    return () => clearInterval(interval);
-  }, [nodes]);
-
-  const handleFollowActionFromNotif = (type: 'category' | 'node', id: string, label: string) => {
-    if (type === 'category') {
-      toggleFollowCategory(id);
-    } else {
-      toggleFollowNode(id, label);
+    try {
+      const { jobId } = await createGenerationJob(topic);
+      setAppState((prev) => ({
+        ...prev,
+        currentJobId: jobId,
+      }));
+    } catch (error) {
+      setAppState((prev) => ({
+        ...prev,
+        isGenerating: false,
+        error: error instanceof Error ? error.message : "Failed to start generation.",
+      }));
     }
   };
 
-  const handleStartResearch = (topic: string) => {
-    triggerHaptic();
-    setResearchTopic(topic);
-    setIsResearching(true);
-    // Simulate research time
-    setTimeout(() => {
-      setIsResearching(false);
+  const handleGenerationCompleted = async (episodeId: string) => {
+    try {
+      const episode = await fetchEpisode(episodeId);
+      setAppState((prev) => ({
+        ...prev,
+        currentEpisode: episode,
+        currentJobId: null,
+        isGenerating: false,
+        error: null,
+      }));
       setActiveTab("active");
-    }, 3000);
-  };
-
-  const handleSaveBroadcast = (title: string) => {
-    triggerHaptic();
-    if (!savedBroadcasts.includes(title)) {
-      setSavedBroadcasts([...savedBroadcasts, title]);
+    } catch (error) {
+      setAppState((prev) => ({
+        ...prev,
+        error: error instanceof Error ? error.message : "Failed to load generated episode.",
+      }));
     }
   };
 
-  const handleAddNode = (category: string) => {
-    triggerHaptic();
-    const newNode: NodeItem = {
-      id: `node-${Date.now()}`,
-      label: category,
-      icon: "Activity",
-      status: "Online",
-      freq: `${(Math.random() * (108 - 88) + 88).toFixed(1)} MHz`
-    };
-    setNodes([...nodes, newNode]);
+  const handleGenerationFailed = (message: string) => {
+    setAppState((prev) => ({
+      ...prev,
+      error: message,
+    }));
   };
+
+  const cancelGeneration = () => {
+    setAppState((prev) => ({
+      ...prev,
+      currentJobId: null,
+      isGenerating: false,
+    }));
+    setActiveTab("create");
+  };
+
+  const isResearching = appState.isGenerating && Boolean(appState.currentJobId);
 
   return (
     <div className="min-h-screen bg-background text-on-surface selection:bg-primary selection:text-background atmospheric-bg">
-      <TopNav 
-        onSettings={() => { triggerHaptic(); setShowSettings(true); }} 
-        notifications={notifications}
-        onClearNotifications={() => setNotifications([])}
-        onFollowAction={handleFollowActionFromNotif}
-      />
-      
+      <TopNav onSettings={() => setShowSettings(true)} notifications={[]} />
+
       <main className="relative">
         <AnimatePresence mode="wait">
           {showSettings ? (
-            <SettingsScreen 
-              key="settings" 
-              onBack={() => { triggerHaptic(); setShowSettings(false); }} 
+            <SettingsScreen
+              key="settings"
+              onBack={() => setShowSettings(false)}
               theme={theme}
-              onThemeToggle={() => { triggerHaptic(); setTheme(theme === "dark" ? "light" : "dark"); }}
+              onThemeToggle={() => {
+                triggerHaptic();
+                setTheme(theme === "dark" ? "light" : "dark");
+              }}
               hapticEnabled={hapticEnabled}
-              onHapticToggle={() => { setHapticEnabled(!hapticEnabled); setTimeout(triggerHaptic, 0); }}
+              onHapticToggle={() => {
+                setHapticEnabled(!hapticEnabled);
+                setTimeout(triggerHaptic, 0);
+              }}
             />
-          ) : showNodes ? (
-            <NodesScreen 
-              key="nodes" 
-              onBack={() => { triggerHaptic(); setShowNodes(false); }} 
-              nodes={nodes}
-              onReorder={(newNodes) => { triggerHaptic(); setNodes(newNodes); }}
+          ) : isResearching && appState.currentTopic && appState.currentJobId ? (
+            <ResearchingScreen
+              key="researching"
+              topic={appState.currentTopic}
+              jobId={appState.currentJobId}
+              onCompleted={handleGenerationCompleted}
+              onCancel={cancelGeneration}
+              onJobFailed={handleGenerationFailed}
             />
-          ) : isResearching ? (
-            <ResearchingScreen key="researching" topic={researchTopic} />
           ) : (
             <>
               {activeTab === "discover" && (
-                <DiscoverScreen 
-                  key="discover" 
-                  onNodes={() => { triggerHaptic(); setShowNodes(true); }} 
-                  onAddNode={handleAddNode}
-                  followedCategories={followedCategories}
-                  onFollowCategory={toggleFollowCategory}
-                  followedNodes={followedNodes}
-                  onFollowNode={toggleFollowNode}
+                <DiscoverScreen
+                  key="discover"
+                  followedCategories={[]}
+                  onFollowCategory={() => undefined}
+                  followedNodes={[]}
+                  onFollowNode={() => undefined}
                 />
               )}
-              {activeTab === "create" && <CreateScreen key="create" onStartResearch={handleStartResearch} />}
-              {activeTab === "active" && <ActiveScreen key="active" onSave={handleSaveBroadcast} triggerHaptic={triggerHaptic} />}
-              {activeTab === "profile" && (
-                <ProfileScreen 
-                  key="profile" 
-                  savedBroadcasts={savedBroadcasts} 
-                  avatarUrl={avatarUrl}
-                  onAvatarChange={(url) => { triggerHaptic(); setAvatarUrl(url); }}
+              {activeTab === "create" && (
+                <CreateScreen
+                  key="create"
+                  onStartResearch={handleStartResearch}
+                  isSubmitting={appState.isGenerating}
+                  error={appState.error}
                 />
               )}
+              {activeTab === "active" && appState.currentEpisode && (
+                <ActiveScreen
+                  key="active"
+                  episode={appState.currentEpisode}
+                  triggerHaptic={triggerHaptic}
+                  error={appState.error}
+                />
+              )}
+              {activeTab === "active" && !appState.currentEpisode && (
+                <CreateScreen
+                  key="create-fallback"
+                  onStartResearch={handleStartResearch}
+                  isSubmitting={appState.isGenerating}
+                  error={appState.error || "Generate an episode from the Create tab first."}
+                />
+              )}
+              {activeTab === "profile" && <ProfileScreen key="profile" savedBroadcasts={[]} />}
             </>
           )}
         </AnimatePresence>
       </main>
 
-      {!isResearching && !showSettings && !showNodes && (
-        <BottomNav 
-          activeTab={activeTab} 
-          onTabChange={(tab) => { triggerHaptic(); setActiveTab(tab); }} 
+      {!isResearching && !showSettings && (
+        <BottomNav
+          activeTab={activeTab}
+          onTabChange={(tab) => {
+            triggerHaptic();
+            setActiveTab(tab);
+          }}
         />
       )}
     </div>

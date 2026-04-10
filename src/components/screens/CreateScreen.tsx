@@ -34,7 +34,7 @@ type SpeechWindow = Window & {
   webkitSpeechRecognition?: SpeechRecognitionCtor;
 };
 
-export const CreateScreen: React.FC<CreateScreenProps> = ({ onStartResearch }) => {
+export const CreateScreen: React.FC<CreateScreenProps> = ({ onStartResearch, isSubmitting = false, error }) => {
   const [isListening, setIsListening] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
@@ -60,7 +60,7 @@ export const CreateScreen: React.FC<CreateScreenProps> = ({ onStartResearch }) =
         if (event.results[0].isFinal) {
           setTimeout(() => {
             if (transcript.trim()) {
-              onStartResearch(transcript);
+              void onStartResearch(transcript);
             }
           }, 800);
         }
@@ -140,10 +140,19 @@ export const CreateScreen: React.FC<CreateScreenProps> = ({ onStartResearch }) =
                 type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && onStartResearch(inputValue)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    void onStartResearch(inputValue);
+                  }
+                }}
               />
               <button
-                onClick={() => inputValue.trim() && onStartResearch(inputValue)}
+                onClick={() => {
+                  if (inputValue.trim()) {
+                    void onStartResearch(inputValue);
+                  }
+                }}
+                disabled={isSubmitting}
                 className="bg-surface-container-high hover:bg-surface-container-highest p-2 rounded-lg text-secondary transition-colors"
               >
                 <ArrowRight />
@@ -161,7 +170,10 @@ export const CreateScreen: React.FC<CreateScreenProps> = ({ onStartResearch }) =
           ].map((chip) => (
             <button
               key={chip.label}
-              onClick={() => onStartResearch(chip.label)}
+              onClick={() => {
+                void onStartResearch(chip.label);
+              }}
+              disabled={isSubmitting}
               className="px-5 py-2 rounded-full glass-panel border border-outline-variant/10 text-on-surface-variant hover:text-secondary hover:border-secondary/30 transition-all text-sm font-medium flex items-center gap-2"
             >
               <chip.icon className="w-4 h-4" />
@@ -169,6 +181,9 @@ export const CreateScreen: React.FC<CreateScreenProps> = ({ onStartResearch }) =
             </button>
           ))}
         </div>
+        {error && (
+          <p className="text-sm text-error text-center">{error}</p>
+        )}
       </div>
     </motion.div>
   );

@@ -1,70 +1,131 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { CheckCircle2, Loader2, Activity } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import type { GenerationStep } from "@/src/types/api";
+import { fetchGenerationJob } from "@/src/lib/api";
 import type { ResearchingScreenProps } from "./types";
 
-export const ResearchingScreen: React.FC<ResearchingScreenProps> = ({ topic }) => (
-  <motion.div
-    initial={{ opacity: 0 }}
-    animate={{ opacity: 1 }}
-    exit={{ opacity: 0 }}
-    className="relative h-screen w-full flex flex-col items-center justify-center px-6 text-center overflow-hidden"
-  >
-    <div className="absolute inset-0 z-0 overflow-hidden">
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-primary/5 rounded-full blur-[120px]"></div>
-      <div className="absolute top-1/4 left-1/3 w-[400px] h-[400px] bg-secondary/5 rounded-full blur-[100px]"></div>
-    </div>
+const STEP_LABELS: Record<GenerationStep, string> = {
+  collecting_sources: "Collecting sources",
+  building_bundle: "Building source bundle",
+  generating_episode: "Generating episode",
+  finalizing: "Finalizing",
+};
 
-    <div className="relative z-10 mb-12 flex items-center justify-center">
-      <div className="absolute w-64 h-64 rounded-full border border-secondary/20 animate-pulse"></div>
-      <div className="absolute w-48 h-48 rounded-full border border-primary/20 scale-125"></div>
-      <div className="absolute w-32 h-32 rounded-full border border-tertiary/20"></div>
-      <div className="relative w-24 h-24 rounded-full bg-linear-to-tr from-primary to-secondary flex items-center justify-center neon-glow">
-        <Activity className="text-background w-10 h-10" />
-      </div>
+export const ResearchingScreen: React.FC<ResearchingScreenProps> = ({
+  topic,
+  jobId,
+  onCompleted,
+  onCancel,
+  onJobFailed,
+}) => {
+  const [step, setStep] = useState<GenerationStep>("collecting_sources");
+  const [status, setStatus] = useState<"pending" | "running" | "failed" | "completed">("pending");
+  const [error, setError] = useState<string | null>(null);
 
-      <div className="absolute -top-12 -right-16 glass-panel px-4 py-2 rounded-xl border border-outline-variant/15 flex items-center gap-2">
-        <div className="w-1.5 h-1.5 rounded-full bg-secondary"></div>
-        <span className="text-[10px] font-body font-medium text-secondary uppercase tracking-[0.2em]">Live Feed</span>
-      </div>
-      <div className="absolute bottom-4 -left-20 glass-panel px-4 py-2 rounded-xl border border-outline-variant/15 flex items-center gap-2">
-        <div className="w-1.5 h-1.5 rounded-full bg-tertiary"></div>
-        <span className="text-[10px] font-body font-medium text-tertiary uppercase tracking-[0.2em]">Neural Sync</span>
-      </div>
-    </div>
+  useEffect(() => {
+    let stopped = false;
 
-    <div className="relative z-10 max-w-2xl space-y-4">
-      <h1 className="font-headline text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight text-on-surface">
-        Researching the latest on <span className="bg-linear-to-r from-primary to-secondary bg-clip-text text-transparent">{topic}</span>...
-      </h1>
+    const poll = async () => {
+      try {
+        const job = await fetchGenerationJob(jobId);
+        if (stopped) return;
 
-      <div className="pt-8 flex flex-col items-center gap-6">
-        <div className="flex flex-col gap-3 w-full max-w-sm">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="text-secondary w-5 h-5" />
-              <span className="text-on-surface-variant text-sm font-medium">Scanning news sources...</span>
-            </div>
-            <span className="text-[10px] text-secondary font-mono">100%</span>
+        setStatus(job.status);
+
+        if (job.step) {
+          setStep(job.step);
+        }
+
+        if (job.status === "completed" && job.episodeId) {
+          await onCompleted(job.episodeId);
+          return;
+        }
+
+        if (job.status === "failed") {
+          const message = job.errorMessage || "Episode generation failed.";
+          setError(message);
+          onJobFailed(message);
+          return;
+        }
+      } catch (pollError) {
+        if (stopped) return;
+        const message = pollError instanceof Error ? pollError.message : "Failed to check job status.";
+        setError(message);
+        setStatus("failed");
+        onJobFailed(message);
+        return;
+      }
+
+      window.setTimeout(poll, 1500);
+    };
+
+    void poll();
+
+    return () => {
+      stopped = true;
+    };
+  }, [jobId, onCompleted, onJobFailed]);
+
+  const steps: GenerationStep[] = [
+    "collecting_sources",
+    "building_bundle",
+    "generating_episode",
+    "finalizing",
+  ];
+
+  const currentIndex = steps.indexOf(step);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="relative h-screen w-full flex flex-col items-center justify-center px-6 text-center overflow-hidden"
+    >
+      <div className="relative z-10 max-w-2xl space-y-8 w-full">
+        <h1 className="font-headline text-4xl md:text-5xl font-bold tracking-tight text-on-surface">
+          Researching <span className="bg-linear-to-r from-primary to-secondary bg-clip-text text-transparent">{topic}</span>
+        </h1>
+
+        {status !== "failed" ? (
+          <div className="space-y-4">
+            {steps.map((stepName, index) => {
+              const isDone = index < currentIndex;
+              const isActive = index === currentIndex;
+              return (
+                <div key={stepName} className="flex items-center justify-between glass-panel rounded-xl p-4 border border-outline-variant/15">
+                  <div className="flex items-center gap-3">
+                    {isDone ? (
+                      <CheckCircle2 className="text-secondary w-5 h-5" />
+                    ) : (
+                      <Loader2 className={`w-5 h-5 ${isActive ? "animate-spin text-primary" : "text-on-surface-variant"}`} />
+                    )}
+                    <span className={isActive ? "text-on-surface" : "text-on-surface-variant"}>{STEP_LABELS[stepName]}</span>
+                  </div>
+                  <span className="text-xs text-on-surface-variant uppercase tracking-widest">
+                    {isDone ? "Done" : isActive ? "Running" : "Waiting"}
+                  </span>
+                </div>
+              );
+            })}
           </div>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Loader2 className="text-primary w-5 h-5 animate-spin" />
-              <span className="text-on-surface text-sm font-medium">Synthesizing key insights...</span>
+        ) : (
+          <div className="glass-panel rounded-xl p-6 border border-error/30 space-y-3">
+            <div className="flex items-center justify-center gap-2 text-error">
+              <AlertTriangle className="w-5 h-5" />
+              <span className="font-semibold">Generation failed</span>
             </div>
-            <span className="text-[10px] text-primary font-mono italic">Processing</span>
+            <p className="text-sm text-on-surface-variant">{error || "Unexpected error."}</p>
+            <button
+              onClick={onCancel}
+              className="mt-2 px-4 py-2 rounded-lg bg-surface-container-high hover:bg-surface-container-highest text-on-surface"
+            >
+              Back to Create
+            </button>
           </div>
-        </div>
-
-        <div className="w-full max-w-md h-[2px] bg-surface-container-high rounded-full overflow-hidden mt-4">
-          <motion.div
-            initial={{ x: "-100%" }}
-            animate={{ x: "0%" }}
-            transition={{ duration: 2, repeat: Infinity }}
-            className="h-full w-2/3 bg-linear-to-r from-primary-dim via-secondary to-primary rounded-full neon-glow"
-          />
-        </div>
+        )}
       </div>
-    </div>
-  </motion.div>
-);
+    </motion.div>
+  );
+};

@@ -1,8 +1,8 @@
 # Radio Presto
 
-A frontend prototype of an AI-powered radio platform. Generated via Google AI Studio, it is a purely visual/interactive mock with no backend, no real audio, and no active AI integration.
+A minimal full-stack V1 of Radio Presto. Users can enter one topic, generate one episode from fresh sources, and play the generated audio.
 
-**Status: UI prototype — no real functionality beyond local state management.**
+**Status: vertical slice (Create → Researching → Active) implemented.**
 
 ---
 
@@ -40,9 +40,10 @@ cp .env.example .env.local
 ## Running Locally
 
 ```bash
-npm run dev        # http://localhost:3000
+npm run dev:api    # backend API on http://localhost:3001
+npm run dev        # frontend on http://localhost:3000
 npm run build      # production build → dist/
-npm run lint       # TypeScript type checking only (no test runner)
+npm run lint       # TypeScript type checking
 ```
 
 ---
