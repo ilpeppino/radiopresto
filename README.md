@@ -46,6 +46,28 @@ npm run build      # production build → dist/
 npm run lint       # TypeScript type checking
 ```
 
+## Optional: Local Podcastfy Service
+
+If you want backend script generation to use Podcastfy instead of Gemini fallback:
+
+```bash
+cd services/podcastfy_api
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+cd /Volumes/DevSSD/projects/radiopresto
+npm run dev:podcastfy
+```
+
+Set in `.env.local`:
+
+```env
+PODCASTFY_ENDPOINT_URL="http://localhost:8000/generate"
+```
+
+Then restart `npm run dev:api`.
+
 ---
 
 ## Project Structure

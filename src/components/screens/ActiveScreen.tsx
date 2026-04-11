@@ -3,10 +3,35 @@ import { motion } from "motion/react";
 import { Pause, Play, AlertTriangle, ExternalLink } from "lucide-react";
 import type { ActiveScreenProps } from "./types";
 
+const isDev = import.meta.env.DEV;
+
+function devLog(message: string, details?: unknown): void {
+  if (!isDev) return;
+  if (details !== undefined) {
+    console.log(`[ActiveScreen] ${message}`, details);
+    return;
+  }
+  console.log(`[ActiveScreen] ${message}`);
+}
+
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function normalizeAudioUrl(audioUrl: string): string {
+  if (!audioUrl) return "";
+
+  if (audioUrl.startsWith("http://") || audioUrl.startsWith("https://") || audioUrl.startsWith("/")) {
+    return audioUrl;
+  }
+
+  if (audioUrl.startsWith("//")) {
+    return `${window.location.protocol}${audioUrl}`;
+  }
+
+  return `${window.location.protocol}//${audioUrl}`;
 }
 
 export const ActiveScreen: React.FC<ActiveScreenProps> = ({ episode, error, triggerHaptic }) => {
@@ -15,6 +40,9 @@ export const ActiveScreen: React.FC<ActiveScreenProps> = ({ episode, error, trig
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(episode.durationSeconds ?? 0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const normalizedAudioUrl = normalizeAudioUrl(episode.audioUrl);
+  const canPlayWav = typeof document !== "undefined" ? document.createElement("audio").canPlayType("audio/wav") : "";
+  const canPlayAiff = typeof document !== "undefined" ? document.createElement("audio").canPlayType("audio/aiff") : "";
 
   const resolvedError = error || playbackError;
 
@@ -35,10 +63,17 @@ export const ActiveScreen: React.FC<ActiveScreenProps> = ({ episode, error, trig
     }
 
     try {
+      devLog("Attempting play()", {
+        src: audio.currentSrc || normalizedAudioUrl,
+        networkState: audio.networkState,
+        readyState: audio.readyState,
+      });
       await audio.play();
       setIsPlaying(true);
       setPlaybackError(null);
+      devLog("Playback started");
     } catch (playError) {
+      devLog("play() failed", playError);
       setPlaybackError(playError instanceof Error ? playError.message : "Playback failed.");
     }
   };
@@ -67,22 +102,58 @@ export const ActiveScreen: React.FC<ActiveScreenProps> = ({ episode, error, trig
       </section>
 
       <section className="glass-panel rounded-3xl p-6 border border-outline-variant/15 space-y-6">
+        {isDev && (
+          <div className="text-xs text-on-surface-variant bg-surface-container-low border border-outline-variant/10 rounded-lg p-3">
+            <p>Debug URL: {normalizedAudioUrl}</p>
+            <p>canPlay audio/wav: {canPlayWav || "no"}</p>
+            <p>canPlay audio/aiff: {canPlayAiff || "no"}</p>
+          </div>
+        )}
         <audio
           ref={audioRef}
-          src={episode.audioUrl}
           preload="metadata"
+          onLoadStart={(event) => {
+            devLog("loadstart", { src: event.currentTarget.currentSrc || normalizedAudioUrl });
+          }}
+          onCanPlay={(event) => {
+            devLog("canplay", {
+              src: event.currentTarget.currentSrc || normalizedAudioUrl,
+              duration: event.currentTarget.duration,
+            });
+          }}
           onTimeUpdate={(event) => {
             setCurrentTime(event.currentTarget.currentTime);
           }}
           onLoadedMetadata={(event) => {
+            devLog("loadedmetadata", {
+              src: event.currentTarget.currentSrc || normalizedAudioUrl,
+              duration: event.currentTarget.duration,
+              readyState: event.currentTarget.readyState,
+            });
             setDuration(event.currentTarget.duration || episode.durationSeconds || 0);
           }}
-          onEnded={() => setIsPlaying(false)}
-          onError={() => {
+          onEnded={() => {
+            devLog("ended");
+            setIsPlaying(false);
+          }}
+          onError={(event) => {
+            const mediaError = event.currentTarget.error;
+            devLog("audio error", {
+              src: event.currentTarget.currentSrc || normalizedAudioUrl,
+              mediaErrorCode: mediaError?.code,
+              mediaErrorMessage: mediaError?.message,
+              networkState: event.currentTarget.networkState,
+              readyState: event.currentTarget.readyState,
+            });
             setPlaybackError("Unable to play this audio file.");
             setIsPlaying(false);
           }}
-        />
+        >
+          <source src={normalizedAudioUrl} type="audio/wav" />
+          <source src={normalizedAudioUrl} type="audio/x-wav" />
+          <source src={normalizedAudioUrl} type="audio/aiff" />
+          <source src={normalizedAudioUrl} type="audio/x-aiff" />
+        </audio>
 
         <div className="space-y-3">
           <div className="relative w-full h-2 bg-surface-container-high rounded-full overflow-hidden">

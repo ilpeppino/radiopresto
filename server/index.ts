@@ -16,7 +16,6 @@ const app = express();
 app.use(express.json());
 
 const PORT = Number(process.env.API_PORT ?? 3001);
-const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 const MEDIA_DIR = path.resolve("storage/audio");
 
 const GENERATION_STEPS = [
@@ -154,7 +153,7 @@ async function processJob(jobId: string): Promise<void> {
     topic: job.topic,
     title: episodeTitle,
     summary,
-    audioUrl: `${APP_URL}/media/${filename}`,
+    audioUrl: `/media/${filename}`,
     durationSeconds,
     createdAt: new Date().toISOString(),
     sources: sourceBundle,
@@ -355,7 +354,7 @@ Sources:\n${sourceList}`;
 
   if (ai) {
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
     });
 
@@ -383,8 +382,10 @@ function buildSummary(sources: SourceItem[]): string {
 }
 
 async function synthesizeAudio(script: string, episodeId: string): Promise<{ filename: string; durationSeconds: number }> {
-  const filename = `${episodeId}.aiff`;
-  const outputPath = path.join(MEDIA_DIR, filename);
+  const aiffFilename = `${episodeId}.aiff`;
+  const wavFilename = `${episodeId}.wav`;
+  const aiffPath = path.join(MEDIA_DIR, aiffFilename);
+  const wavPath = path.join(MEDIA_DIR, wavFilename);
 
   await fs.mkdir(MEDIA_DIR, { recursive: true });
 
@@ -395,19 +396,31 @@ async function synthesizeAudio(script: string, episodeId: string): Promise<{ fil
       "-r",
       process.env.TTS_RATE ?? "185",
       "-o",
-      outputPath,
+      aiffPath,
       script,
     ]);
+
+    // Convert AIFF to WAV for browser-compatible HTML audio playback.
+    await execFileAsync("afconvert", [
+      "-f",
+      "WAVE",
+      "-d",
+      "LEI16@22050",
+      aiffPath,
+      wavPath,
+    ]);
+
+    await fs.unlink(aiffPath).catch(() => undefined);
   } catch (error) {
     throw new Error(
-      `Audio synthesis failed. Ensure macOS 'say' is available and the topic is valid. ${
+      `Audio synthesis failed. Ensure macOS 'say' and 'afconvert' are available. ${
         error instanceof Error ? error.message : ""
       }`,
     );
   }
 
   return {
-    filename,
+    filename: wavFilename,
     durationSeconds: estimateDurationSeconds(script),
   };
 }
