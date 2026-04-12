@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { Pause, Play, AlertTriangle, ExternalLink } from "lucide-react";
 import type { ActiveScreenProps } from "./types";
@@ -34,6 +34,19 @@ function normalizeAudioUrl(audioUrl: string): string {
   return `${window.location.protocol}//${audioUrl}`;
 }
 
+function resolveAudioType(explicitMimeType?: string, audioUrl?: string): string {
+  if (explicitMimeType) {
+    return explicitMimeType;
+  }
+
+  if (!audioUrl) return "audio/mpeg";
+
+  const lower = audioUrl.toLowerCase();
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".aiff") || lower.endsWith(".aif")) return "audio/aiff";
+  return "audio/mpeg";
+}
+
 export const ActiveScreen: React.FC<ActiveScreenProps> = ({ episode, error, triggerHaptic }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -41,10 +54,20 @@ export const ActiveScreen: React.FC<ActiveScreenProps> = ({ episode, error, trig
   const [duration, setDuration] = useState(episode.durationSeconds ?? 0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const normalizedAudioUrl = normalizeAudioUrl(episode.audioUrl);
-  const canPlayWav = typeof document !== "undefined" ? document.createElement("audio").canPlayType("audio/wav") : "";
-  const canPlayAiff = typeof document !== "undefined" ? document.createElement("audio").canPlayType("audio/aiff") : "";
+  const audioMimeType = resolveAudioType(episode.audioMimeType, episode.audioUrl);
+  const canPlayType = typeof document !== "undefined"
+    ? document.createElement("audio").canPlayType(audioMimeType)
+    : "";
 
   const resolvedError = error || playbackError;
+
+  useEffect(() => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(episode.durationSeconds ?? 0);
+    setPlaybackError(null);
+    audioRef.current?.load();
+  }, [episode.id, episode.audioUrl, episode.durationSeconds]);
 
   const progressPercent = useMemo(() => {
     if (!duration) return 0;
@@ -105,8 +128,8 @@ export const ActiveScreen: React.FC<ActiveScreenProps> = ({ episode, error, trig
         {isDev && (
           <div className="text-xs text-on-surface-variant bg-surface-container-low border border-outline-variant/10 rounded-lg p-3">
             <p>Debug URL: {normalizedAudioUrl}</p>
-            <p>canPlay audio/wav: {canPlayWav || "no"}</p>
-            <p>canPlay audio/aiff: {canPlayAiff || "no"}</p>
+            <p>Debug MIME: {audioMimeType}</p>
+            <p>canPlay: {canPlayType || "no"}</p>
           </div>
         )}
         <audio
@@ -149,10 +172,9 @@ export const ActiveScreen: React.FC<ActiveScreenProps> = ({ episode, error, trig
             setIsPlaying(false);
           }}
         >
+          <source src={normalizedAudioUrl} type={audioMimeType} />
+          <source src={normalizedAudioUrl} type="audio/mpeg" />
           <source src={normalizedAudioUrl} type="audio/wav" />
-          <source src={normalizedAudioUrl} type="audio/x-wav" />
-          <source src={normalizedAudioUrl} type="audio/aiff" />
-          <source src={normalizedAudioUrl} type="audio/x-aiff" />
         </audio>
 
         <div className="space-y-3">

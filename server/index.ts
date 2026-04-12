@@ -2,13 +2,17 @@ import express from "express";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
+import { createTtsProvider } from "./services/tts/provider";
+import { normalizeScriptForTts, validateNarrationForTts } from "./services/tts/normalize";
 
-const execFileAsync = promisify(execFile);
-
+const CURRENT_FILE = fileURLToPath(import.meta.url);
+const SERVER_DIR = path.dirname(CURRENT_FILE);
+const PROJECT_ROOT = path.resolve(SERVER_DIR, "..");
+dotenv.config({ path: path.join(PROJECT_ROOT, ".env.local") });
+dotenv.config({ path: path.join(PROJECT_ROOT, ".env") });
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
@@ -41,10 +45,18 @@ type Episode = {
   topic: string;
   title: string;
   summary: string;
+  transcript: string;
   audioUrl: string;
+  audioMimeType?: string;
   durationSeconds?: number;
   createdAt: string;
   sources: SourceItem[];
+};
+
+type GeneratedEpisode = {
+  title: string;
+  summary: string;
+  narrationText: string;
 };
 
 type GenerationJob = {
@@ -60,6 +72,14 @@ type GenerationJob = {
 
 const jobs = new Map<string, GenerationJob>();
 const episodes = new Map<string, Episode>();
+let ttsProvider: ReturnType<typeof createTtsProvider> | null = null;
+
+function getTtsProvider() {
+  if (!ttsProvider) {
+    ttsProvider = createTtsProvider();
+  }
+  return ttsProvider;
+}
 
 const apiKey = process.env.GEMINI_API_KEY;
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
@@ -139,21 +159,35 @@ async function processJob(jobId: string): Promise<void> {
   }
 
   setJobState(jobId, { step: "generating_episode" });
-  const script = await runPodcastfyScriptGeneration(job.topic, sourceBundle);
-  const episodeTitle = buildEpisodeTitle(job.topic);
-  const summary = buildSummary(sourceBundle);
+  const generatedEpisode = await runPodcastfyScriptGeneration(job.topic, sourceBundle);
+  const normalizedScript = normalizeScriptForTts(generatedEpisode.narrationText);
+  console.info("[Pipeline] Normalized narration preview", {
+    preview: previewText(normalizedScript),
+    characters: normalizedScript.length,
+  });
+  if (!normalizedScript) {
+    throw new Error("Podcastfy returned empty narration text after normalization.");
+  }
+  const validation = validateNarrationForTts(normalizedScript);
+  if (!validation.valid) {
+    throw new Error(validation.reason ?? "Narration failed validation before TTS.");
+  }
+  const episodeTitle = generatedEpisode.title || buildEpisodeTitle(job.topic);
+  const summary = generatedEpisode.summary || buildSummary(sourceBundle);
 
   setJobState(jobId, { step: "finalizing" });
 
   const episodeId = randomUUID();
-  const { filename, durationSeconds } = await synthesizeAudio(script, episodeId);
+  const { audioUrl, mimeType, durationSeconds } = await synthesizeAudio(normalizedScript, episodeId);
 
   const episode: Episode = {
     id: episodeId,
     topic: job.topic,
     title: episodeTitle,
     summary,
-    audioUrl: `/media/${filename}`,
+    transcript: normalizedScript,
+    audioUrl,
+    audioMimeType: mimeType,
     durationSeconds,
     createdAt: new Date().toISOString(),
     sources: sourceBundle,
@@ -299,8 +333,210 @@ function buildSourceBundle(sources: SourceItem[], topic: string): SourceItem[] {
   return scored.slice(0, 5).map((entry) => entry.source);
 }
 
-async function runPodcastfyScriptGeneration(topic: string, sources: SourceItem[]): Promise<string> {
-  const sourceList = sources
+async function runPodcastfyScriptGeneration(topic: string, sources: SourceItem[]): Promise<GeneratedEpisode> {
+  const prompt = buildFinalNarrationPrompt(topic, sources);
+
+  const fallbackTitle = buildEpisodeTitle(topic);
+  const fallbackSummary = buildSummary(sources);
+  const podcastfyEndpoint = process.env.PODCASTFY_ENDPOINT_URL;
+  if (podcastfyEndpoint) {
+    const response = await fetch(podcastfyEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic, sources, prompt }),
+    });
+
+    if (response.ok) {
+      const payload = (await response.json()) as unknown;
+      console.info("[Podcastfy] Raw response preview", {
+        preview: previewText(typeof payload === "string" ? payload : JSON.stringify(payload)),
+      });
+      const extracted = extractGeneratedEpisode(payload, fallbackTitle, fallbackSummary);
+      if (isAcceptableNarration(extracted.narrationText)) {
+        return extracted;
+      }
+      console.warn("[Podcastfy] Endpoint response rejected due to narration quality checks.");
+    }
+  }
+
+  if (ai) {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+    });
+
+    const text = response.text?.trim();
+    if (text) {
+      console.info("[Podcastfy] Gemini fallback output preview", {
+        preview: previewText(text),
+      });
+      const extracted = extractGeneratedEpisode(parsePossibleJson(text), fallbackTitle, fallbackSummary);
+      if (isAcceptableNarration(extracted.narrationText)) {
+        return extracted;
+      }
+      console.warn("[Podcastfy] Gemini fallback rejected due to narration quality checks.");
+    }
+  }
+
+  // Fallback keeps the flow working if Gemini is unavailable.
+  const fallbackNarration = [
+    `Here is your Radio Presto update on ${topic}.`,
+    `Recent reporting highlights several important developments.`,
+    ...sources.map((source) => `${source.title}.`),
+    `Taken together, these updates show how quickly the story is evolving and why it matters right now.`,
+    `We will keep tracking this topic as new reporting comes in.`,
+  ].join(" ");
+  console.info("[Podcastfy] Local fallback output preview", {
+    preview: previewText(fallbackNarration),
+  });
+  return {
+    title: fallbackTitle,
+    summary: fallbackSummary,
+    narrationText: fallbackNarration,
+  };
+}
+
+function buildFinalNarrationPrompt(topic: string, sources: SourceItem[]): string {
+  const nodeLabel = topic;
+  const timeWindow = buildTimeWindow(sources);
+  const sourceBundle = formatSourceBundleForPrompt(sources);
+
+  return `# Radio Presto - Final Narration Generation Prompt (V1)
+
+## ROLE
+
+You are a professional radio journalist and podcast narrator.
+
+Your task is to produce a short, engaging, fact-based audio segment based ONLY on the provided sources.
+
+---
+
+## OUTPUT FORMAT (STRICT)
+
+You MUST return a valid JSON object with exactly this structure:
+
+{
+  "title": string,
+  "summary": string,
+  "narrationText": string
+}
+
+No extra fields.
+No markdown.
+No explanations.
+
+---
+
+## CRITICAL RULES FOR narrationText
+
+The narrationText MUST:
+
+- be written as a single narrator
+- be continuous spoken prose
+- sound like a radio/podcast segment
+- be natural when read aloud
+- be clear, engaging, and concise
+- follow a logical flow (introduction -> developments -> insight -> closing)
+
+---
+
+## narrationText MUST NOT contain:
+
+- any planning text
+- any instructions
+- any meta commentary
+- any analysis of the task
+- any section labels such as:
+  - "Hook"
+  - "Context"
+  - "Main Developments"
+  - "Insight"
+  - "Closing"
+- any dialogue or multiple speakers
+- any speaker labels such as:
+  - Person1 / Person2
+- any bullet points
+- any markdown
+- any XML or tags
+- any references to "sources" explicitly
+- any phrases like:
+  - "Here's my plan"
+  - "Let's start"
+  - "In this section"
+  - "The article states"
+
+---
+
+## STYLE REQUIREMENTS
+
+- write for listening, not reading
+- vary sentence length
+- avoid long, complex sentences
+- avoid generic AI phrases
+- avoid filler like "it is interesting to note"
+- keep tone:
+  - informative
+  - slightly dynamic
+  - confident
+  - not sensational
+
+---
+
+## LENGTH
+
+Target:
+- 400-700 words
+
+---
+
+## CONTENT RULES
+
+- use ONLY the provided sources
+- do NOT invent facts
+- do NOT speculate beyond what sources support
+- synthesize information into a coherent narrative
+- connect ideas smoothly
+
+---
+
+## INPUT
+
+NODE:
+${nodeLabel}
+
+TIME WINDOW:
+${timeWindow}
+
+SOURCES:
+${sourceBundle}
+
+---
+
+## EXAMPLE OF CORRECT narrationText
+
+Italy is making headlines this week for reasons that go far beyond its borders. A recent attack on an oil pipeline has raised concerns about fuel supplies in southern Germany, highlighting just how interconnected European energy systems have become...
+
+---
+
+## FINAL INSTRUCTION
+
+Return ONLY the JSON object.
+
+Do NOT include:
+- explanations
+- planning
+- analysis
+- notes
+
+Only produce the final result.`;
+}
+
+function formatSourceBundleForPrompt(sources: SourceItem[]): string {
+  if (sources.length === 0) {
+    return "- No sources were provided.";
+  }
+
+  return sources
     .map((source, index) => {
       const lines = [
         `${index + 1}. ${source.title}`,
@@ -314,62 +550,49 @@ async function runPodcastfyScriptGeneration(topic: string, sources: SourceItem[]
       return lines.join("\n");
     })
     .join("\n\n");
+}
 
-  const prompt = `You are the Radio Presto Podcastfy writer. Generate a 600-700 word podcast script in natural spoken English.
-Use ONLY the provided sources.
+function buildTimeWindow(sources: SourceItem[]): string {
+  const timestamps = sources
+    .map((source) => source.publishedAt)
+    .filter((value): value is string => Boolean(value))
+    .map((value) => Date.parse(value))
+    .filter((value) => Number.isFinite(value));
 
-Topic: ${topic}
+  if (timestamps.length === 0) {
+    return "Not specified";
+  }
 
-Required structure:
-1) Hook
-2) Context
-3) Main developments
-4) Insight
-5) Closing
+  const min = new Date(Math.min(...timestamps)).toISOString();
+  const max = new Date(Math.max(...timestamps)).toISOString();
+  return `${min} to ${max}`;
+}
 
-Rules:
-- No generic AI phrases.
-- No repetition.
-- Keep transitions smooth.
-- Do not mention source URLs in narration.
-- Keep it suitable for text-to-speech delivery.
-
-Sources:\n${sourceList}`;
-
-  const podcastfyEndpoint = process.env.PODCASTFY_ENDPOINT_URL;
-  if (podcastfyEndpoint) {
-    const response = await fetch(podcastfyEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic, sources, prompt }),
-    });
-
-    if (response.ok) {
-      const payload = (await response.json()) as { script?: string };
-      if (typeof payload.script === "string" && payload.script.trim()) {
-        return payload.script.trim();
-      }
+function parsePossibleJson(value: string): unknown {
+  const candidates = [value, stripCodeFences(value)];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Ignore and continue to next candidate.
     }
   }
+  return value;
+}
 
-  if (ai) {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
+function stripCodeFences(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return match?.[1]?.trim() ?? "";
+}
 
-    const text = response.text?.trim();
-    if (text) return text;
+function isAcceptableNarration(narrationText: string): boolean {
+  const normalized = normalizeScriptForTts(narrationText);
+  if (!normalized) {
+    return false;
   }
-
-  // Fallback keeps the flow working if Gemini is unavailable.
-  return [
-    `Here is your Radio Presto update on ${topic}.`,
-    `Recent reporting highlights several important developments.`,
-    ...sources.map((source) => `${source.title}.`),
-    `Taken together, these updates show how quickly the story is evolving and why it matters right now.`,
-    `We will keep tracking this topic as new reporting comes in.`,
-  ].join(" ");
+  return validateNarrationForTts(normalized).valid;
 }
 
 function buildEpisodeTitle(topic: string): string {
@@ -381,52 +604,126 @@ function buildSummary(sources: SourceItem[]): string {
   return `A concise update based on ${sources.length} recent sources, including ${top.join("; ")}.`;
 }
 
-async function synthesizeAudio(script: string, episodeId: string): Promise<{ filename: string; durationSeconds: number }> {
-  const aiffFilename = `${episodeId}.aiff`;
-  const wavFilename = `${episodeId}.wav`;
-  const aiffPath = path.join(MEDIA_DIR, aiffFilename);
-  const wavPath = path.join(MEDIA_DIR, wavFilename);
-
+async function synthesizeAudio(
+  script: string,
+  episodeId: string,
+): Promise<{ audioUrl: string; mimeType: string; durationSeconds: number }> {
   await fs.mkdir(MEDIA_DIR, { recursive: true });
 
   try {
-    await execFileAsync("say", [
-      "-v",
-      process.env.TTS_VOICE ?? "Samantha",
-      "-r",
-      process.env.TTS_RATE ?? "185",
-      "-o",
-      aiffPath,
-      script,
-    ]);
+    console.info("[Pipeline] TTS input preview", {
+      preview: previewText(script),
+      characters: script.length,
+    });
+    const ttsResult = await getTtsProvider().synthesize({ text: script });
+    if (ttsResult.extension !== "mp3") {
+      throw new Error(`TTS provider returned unsupported format: .${ttsResult.extension}`);
+    }
+    if (ttsResult.mimeType !== "audio/mpeg") {
+      throw new Error(`TTS provider returned unsupported MIME type: ${ttsResult.mimeType}`);
+    }
+    const filename = `${episodeId}.${ttsResult.extension}`;
+    const audioPath = path.join(MEDIA_DIR, filename);
+    await fs.writeFile(audioPath, Buffer.from(ttsResult.audioBytes));
 
-    // Convert AIFF to WAV for browser-compatible HTML audio playback.
-    await execFileAsync("afconvert", [
-      "-f",
-      "WAVE",
-      "-d",
-      "LEI16@22050",
-      aiffPath,
-      wavPath,
-    ]);
+    const transcriptPath = path.join(MEDIA_DIR, `${episodeId}.txt`);
+    await fs.writeFile(transcriptPath, script, "utf8");
 
-    await fs.unlink(aiffPath).catch(() => undefined);
+    return {
+      audioUrl: `/media/${filename}`,
+      mimeType: ttsResult.mimeType,
+      durationSeconds: ttsResult.durationSeconds ?? estimateDurationSeconds(script),
+    };
   } catch (error) {
-    throw new Error(
-      `Audio synthesis failed. Ensure macOS 'say' and 'afconvert' are available. ${
-        error instanceof Error ? error.message : ""
-      }`,
-    );
+    throw new Error(`Audio synthesis failed: ${error instanceof Error ? error.message : "Unknown TTS error."}`);
   }
-
-  return {
-    filename: wavFilename,
-    durationSeconds: estimateDurationSeconds(script),
-  };
 }
 
 function estimateDurationSeconds(script: string): number {
   const words = script.trim().split(/\s+/).filter(Boolean).length;
   const wordsPerMinute = 155;
   return Math.max(30, Math.round((words / wordsPerMinute) * 60));
+}
+
+function extractGeneratedEpisode(
+  payload: unknown,
+  fallbackTitle: string,
+  fallbackSummary: string,
+): GeneratedEpisode {
+  if (typeof payload === "string") {
+    const parsed = parsePossibleJson(payload);
+    if (parsed !== payload) {
+      return extractGeneratedEpisode(parsed, fallbackTitle, fallbackSummary);
+    }
+    return {
+      title: fallbackTitle,
+      summary: fallbackSummary,
+      narrationText: payload.trim(),
+    };
+  }
+
+  if (!payload || typeof payload !== "object") {
+    return {
+      title: fallbackTitle,
+      summary: fallbackSummary,
+      narrationText: "",
+    };
+  }
+
+  const record = payload as Record<string, unknown>;
+  const title = pickFirstString(record, ["title", "episodeTitle", "headline"]) || fallbackTitle;
+  const summary = pickFirstString(record, ["summary", "description", "deck"]) || fallbackSummary;
+  const rawNarrationText = pickFirstString(record, [
+    "narrationText",
+    "script",
+    "transcript",
+    "text",
+    "content",
+  ]);
+  const parsedNarration = rawNarrationText ? parsePossibleJson(rawNarrationText) : null;
+  if (parsedNarration && parsedNarration !== rawNarrationText) {
+    const nested = extractGeneratedEpisode(parsedNarration, title, summary);
+    return {
+      title: nested.title || title,
+      summary: nested.summary || summary,
+      narrationText: nested.narrationText?.trim() || "",
+    };
+  }
+
+  return {
+    title,
+    summary,
+    narrationText: rawNarrationText?.trim() || "",
+  };
+}
+
+function pickFirstString(record: Record<string, unknown>, keys: string[]): string | null {
+  const keySet = new Set(keys);
+  const queue: unknown[] = [record];
+  const visited = new Set<unknown>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object" || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    const currentRecord = current as Record<string, unknown>;
+    for (const [key, value] of Object.entries(currentRecord)) {
+      if (keySet.has(key) && typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+
+      if (value && typeof value === "object") {
+        queue.push(value);
+      }
+    }
+  }
+
+  return null;
+}
+
+function previewText(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 240);
 }

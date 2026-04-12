@@ -57,7 +57,16 @@ def generate(payload: GenerateRequest) -> GenerateResponse:
 
 
 def build_composite_text(topic: str, sources: list[SourceItem], prompt: str) -> str:
-  lines = [f"Topic: {topic}", "", "Sources:"]
+  lines = [
+    f"Topic: {topic}",
+    "",
+    "Output contract:",
+    "- Return ONLY the final narration script to be spoken aloud.",
+    "- Do NOT return scratchpad, planning notes, chain-of-thought, or meta commentary.",
+    "- Do NOT repeat instructions.",
+    "",
+    "Sources:",
+  ]
   if not sources:
     lines.append("- No explicit sources were provided.")
   else:

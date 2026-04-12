@@ -12,7 +12,9 @@ export type Episode = {
   topic: string;
   title: string;
   summary: string;
+  transcript?: string;
   audioUrl: string;
+  audioMimeType?: string;
   durationSeconds?: number;
   createdAt: string;
   sources: SourceItem[];
