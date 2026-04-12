@@ -1,0 +1,4 @@
+fastapi>=0.116.0
+uvicorn>=0.35.0
+podcastfy>=0.2.1
+playwright>=1.54.0

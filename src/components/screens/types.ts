@@ -1,3 +1,5 @@
+import type { Episode, GenerationStep } from "@/src/types/api";
+
 export type NodeStatus = "Online" | "Active" | "Standby";
 
 export interface NodeItem {
@@ -18,15 +20,22 @@ export interface DiscoverScreenProps {
 }
 
 export interface CreateScreenProps {
-  onStartResearch: (topic: string) => void;
+  onStartResearch: (topic: string) => Promise<void>;
+  isSubmitting?: boolean;
+  error?: string | null;
 }
 
 export interface ResearchingScreenProps {
   topic: string;
+  jobId: string;
+  onCompleted: (episodeId: string) => Promise<void>;
+  onCancel: () => void;
+  onJobFailed: (message: string) => void;
 }
 
 export interface ActiveScreenProps {
-  onSave?: (title: string) => void;
+  episode: Episode;
+  error?: string | null;
   triggerHaptic: () => void;
 }
 
